@@ -1,36 +1,49 @@
 #!/usr/bin/env python3
-"""news-image-20261119: write the bundled world-news image to /output/entry.png.
+"""Copy the bundled news image to /output/entry.png.
 
-The image sums up Thursday 19 November 2026 in one 1024x1024 picture:
-the Trump-Xi-Putin trilateral in Shenzhen, GTA VI's worldwide launch,
-Anthropic's $83 Nasdaq debut as ANT, Hakeem Jeffries' nomination for
-Speaker, the third strike on the Crimean Bridge, and the World Court's
-Rohingya verdict — plus a ticker with the record Van Gogh sale, Cyclone
-Akvan and the Hormuz tanker mine strikes. Text was composited with PIL
-at build time; the background is an AI-generated world map with no text.
-
-Deterministic by construction: this program only copies the bundled
-entry.png (same bytes every run). No network, no randomness, no clock.
-Standard library only.
+The image for this entry is stored in the repository as entry.png.
+This program copies that file, byte for byte, to the path the
+make.fun harness reads. It uses only the Python standard library,
+makes no network requests, and produces the same bytes on every run.
 """
 
-import os
+import hashlib
 import shutil
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(HERE, "entry.png")
-DST = os.environ.get("NEWS_IMAGE_OUTPUT", "/output/entry.png")
+import sys
+from pathlib import Path
 
 
-def main():
-    os.makedirs(os.path.dirname(DST), exist_ok=True)
-    shutil.copyfile(SRC, DST)
-    with open(DST, "rb") as f:
-        magic = f.read(8)
-    if magic != b"\x89PNG\r\n\x1a\n":
-        raise SystemExit("output is not a valid PNG: %s" % DST)
-    print("wrote %s (%d bytes)" % (DST, os.path.getsize(DST)))
+def verify_copy(source: Path, destination: Path) -> None:
+    """Check the copy is complete before reporting success.
+
+    Exits non-zero with a clear message if the output file is
+    missing, has the wrong size, or differs from the source.
+    """
+    if not destination.exists():
+        raise SystemExit(f"error: {destination} was not created")
+    if destination.stat().st_size != source.stat().st_size:
+        raise SystemExit(
+            f"error: size mismatch: {destination} is "
+            f"{destination.stat().st_size} bytes, expected "
+            f"{source.stat().st_size}"
+        )
+    source_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    dest_digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+    if dest_digest != source_digest:
+        raise SystemExit("error: content mismatch after copy")
+
+
+def main() -> int:
+    source = Path(__file__).resolve().parent / "entry.png"
+    destination = Path("/output/entry.png")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+    verify_copy(source, destination)
+    digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+    print(f"wrote {destination} ({destination.stat().st_size} bytes)")
+    print(f"sha256: {digest}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
