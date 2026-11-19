@@ -1,48 +1,109 @@
-#!/usr/bin/env python3
-"""Copy the bundled news image to /output/entry.png.
+"""Publish the bundled news image for make.fun news-image-20261119.
 
-The image for this entry is stored in the repository as entry.png.
-This program copies that file, byte for byte, to the path the
-make.fun harness reads. It uses only the Python standard library,
-makes no network requests, and produces the same bytes on every run.
+This script copies the entry image that ships with this repository to
+``/output/entry.png`` and then checks the copy byte for byte against the
+source. It uses only the Python standard library and makes no network
+calls, so two runs always produce an identical file.
 """
+
+from __future__ import annotations
 
 import hashlib
 import shutil
 import sys
 from pathlib import Path
 
+SOURCE_FILENAME = "entry.png"
+DESTINATION = Path("/output/entry.png")
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
-def verify_copy(source: Path, destination: Path) -> None:
-    """Check the copy is complete before reporting success.
 
-    Exits non-zero with a clear message if the output file is
-    missing, has the wrong size, or differs from the source.
-    """
-    if not destination.exists():
-        raise SystemExit(f"error: {destination} was not created")
-    if destination.stat().st_size != source.stat().st_size:
-        raise SystemExit(
-            f"error: size mismatch: {destination} is "
-            f"{destination.stat().st_size} bytes, expected "
-            f"{source.stat().st_size}"
-        )
-    source_digest = hashlib.sha256(source.read_bytes()).hexdigest()
-    dest_digest = hashlib.sha256(destination.read_bytes()).hexdigest()
-    if dest_digest != source_digest:
-        raise SystemExit("error: content mismatch after copy")
+def locate_source() -> Path:
+    """Return the path of the entry image bundled next to this script."""
+    here = Path(__file__).resolve().parent
+    return here / SOURCE_FILENAME
+
+
+def digest_file(image_path: Path) -> str:
+    """Return the SHA-256 hex digest of the file at ``image_path``."""
+    hasher = hashlib.sha256()
+    with image_path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(block)
+    return hasher.hexdigest()
+
+
+def copy_image(origin: Path, target: Path) -> int:
+    """Copy ``origin`` to ``target`` and return the number of bytes copied."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(origin, target)
+    return target.stat().st_size
+
+
+class EntryPublisher:
+    """Copy the bundled entry image to /output and verify the result."""
+
+    def __init__(self, origin: Path, target: Path) -> None:
+        self.origin = origin
+        self.target = target
+
+    def verify_copy(self) -> None:
+        """Check the output exists, matches the source size and hash.
+
+        Exits with a non-zero status and a message on stderr if any
+        check fails, so a bad copy can never pass silently.
+        """
+        if not self.target.exists():
+            print(f"error: output missing: {self.target}", file=sys.stderr)
+            raise SystemExit(1)
+        with self.target.open("rb") as handle:
+            header = handle.read(len(PNG_SIGNATURE))
+        if header != PNG_SIGNATURE:
+            print(
+                "error: output is not a PNG file "
+                f"(bad magic bytes: {header!r})",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        source_size = self.origin.stat().st_size
+        target_size = self.target.stat().st_size
+        if target_size != source_size:
+            print(
+                f"error: size mismatch: source {source_size} bytes, "
+                f"output {target_size} bytes",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        source_hash = digest_file(self.origin)
+        target_hash = digest_file(self.target)
+        if target_hash != source_hash:
+            print(
+                f"error: sha256 mismatch: source {source_hash}, "
+                f"output {target_hash}",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+
+    def run(self) -> int:
+        """Copy the image, verify it, and report the result."""
+        copied_bytes = copy_image(self.origin, self.target)
+        self.verify_copy()
+        print(f"Wrote {self.target} ({copied_bytes} bytes)")
+        return 0
 
 
 def main() -> int:
-    source = Path(__file__).resolve().parent / "entry.png"
-    destination = Path("/output/entry.png")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, destination)
-    verify_copy(source, destination)
-    digest = hashlib.sha256(destination.read_bytes()).hexdigest()
-    print(f"wrote {destination} ({destination.stat().st_size} bytes)")
-    print(f"sha256: {digest}")
-    return 0
+    """Locate the bundled image, publish it, and verify the output."""
+    source = locate_source()
+    if not source.exists():
+        print(f"error: bundled source image not found: {source}", file=sys.stderr)
+        print(
+            "error: expected entry.png next to main.py in the repository",
+            file=sys.stderr,
+        )
+        return 2
+    publisher = EntryPublisher(source, DESTINATION)
+    return publisher.run()
 
 
 if __name__ == "__main__":
